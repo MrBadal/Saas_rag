@@ -133,10 +133,25 @@ class MongoDBConnector(DatabaseConnector):
             cursor = self.db[collection_name].find(filter_dict).limit(limit)
             results = list(cursor)
             
-            # Convert ObjectId to string for JSON serialization
-            for doc in results:
-                if '_id' in doc:
-                    doc['_id'] = str(doc['_id'])
+            # Recursively convert ObjectId to string for JSON serialization
+            def convert_objectids(obj):
+                """Recursively convert ObjectId instances to strings"""
+                from bson import ObjectId
+                from datetime import datetime
+                
+                if isinstance(obj, ObjectId):
+                    return str(obj)
+                elif isinstance(obj, datetime):
+                    return obj.isoformat()
+                elif isinstance(obj, dict):
+                    return {k: convert_objectids(v) for k, v in obj.items()}
+                elif isinstance(obj, list):
+                    return [convert_objectids(item) for item in obj]
+                else:
+                    return obj
+            
+            # Convert all results
+            results = [convert_objectids(doc) for doc in results]
             
             return results
             
