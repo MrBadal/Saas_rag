@@ -34,12 +34,17 @@ if [ "$EUID" -eq 0 ]; then
    exit 1
 fi
 
-# Navigate to app directory
+# Navigate to app directory - support both naming conventions
 APP_DIR="$HOME/SaaS_rag"
 if [ ! -d "$APP_DIR" ]; then
-    print_error "Application directory not found at $APP_DIR"
+    # Try alternative naming (lowercase)
+    APP_DIR="$HOME/Saas_rag"
+fi
+
+if [ ! -d "$APP_DIR" ]; then
+    print_error "Application directory not found at $HOME/SaaS_rag or $HOME/Saas_rag"
     print_status "Please clone the repository first:"
-    print_status "git clone <your-repo-url> $APP_DIR"
+    print_status "git clone https://github.com/MrBadal/Saas_rag.git ~/Saas_rag"
     exit 1
 fi
 
