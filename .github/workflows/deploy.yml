@@ -82,13 +82,19 @@ jobs:
           echo "=== Starting Deployment ==="
           
           # Navigate to app directory or clone if doesn't exist
-          if [ ! -d "$HOME/SaaS_rag" ]; then
+          # Support both naming conventions (Saas_rag or SaaS_rag)
+          APP_DIR="$HOME/SaaS_rag"
+          if [ ! -d "$APP_DIR" ]; then
+            APP_DIR="$HOME/Saas_rag"
+          fi
+          
+          if [ ! -d "$APP_DIR" ]; then
             echo "Repository not found. Please clone it manually first time:"
-            echo "git clone <your-repo-url> ~/SaaS_rag"
+            echo "git clone https://github.com/MrBadal/Saas_rag.git ~/Saas_rag"
             exit 1
           fi
           
-          cd $HOME/SaaS_rag
+          cd $APP_DIR
           
           echo "=== Pulling latest code ==="
           git fetch origin
@@ -107,7 +113,7 @@ jobs:
         USE_LOCAL_MODELS=true
         EMBEDDING_SERVICE_URL=http://embedding-service:8001
         OLLAMA_BASE_URL=http://ollama:11434
-        OLLAMA_MODEL=llama3.2
+        OLLAMA_MODEL=llama3.2:1b  # Using smaller model for 8GB RAM compatibility
         
         # AWS Configuration
         AWS_REGION=${{ secrets.AWS_REGION }}
