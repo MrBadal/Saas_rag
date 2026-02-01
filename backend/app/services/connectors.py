@@ -101,8 +101,51 @@ class MongoDBConnector(DatabaseConnector):
         
         return schema
     
-    def execute_query(self, collection: str, filter_dict: Dict) -> List[Dict]:
-        return list(self.db[collection].find(filter_dict))
+    def execute_query(self, query: str) -> List[Dict]:
+        """Execute MongoDB query from JSON string
+        
+        Expected query format (JSON):
+        {
+          "collection": "orders",
+          "filter": {"status": "completed"},
+          "limit": 100
+        }
+        """
+        try:
+            import json
+            query_obj = json.loads(query) if isinstance(query, str) else query
+            
+            # Extract collection and filter
+            collection_name = query_obj.get('collection')
+            filter_dict = query_obj.get('filter', {})
+            limit = query_obj.get('limit', 100)
+            
+            if not collection_name:
+                # Try to infer collection from available collections
+                collections = self.db.list_collection_names()
+                if collections:
+                    collection_name = collections[0]
+                    logger.info(f"No collection specified, using: {collection_name}")
+                else:
+                    raise ValueError("No collection specified and no collections found in database")
+            
+            # Execute query
+            cursor = self.db[collection_name].find(filter_dict).limit(limit)
+            results = list(cursor)
+            
+            # Convert ObjectId to string for JSON serialization
+            for doc in results:
+                if '_id' in doc:
+                    doc['_id'] = str(doc['_id'])
+            
+            return results
+            
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON query: {e}")
+            raise ValueError(f"Invalid JSON query format: {e}")
+        except Exception as e:
+            logger.error(f"MongoDB query execution failed: {e}")
+            raise
     
     def close(self):
         if self.client:
