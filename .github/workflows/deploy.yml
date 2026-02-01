@@ -82,13 +82,13 @@ jobs:
           echo "=== Starting Deployment ==="
           
           # Navigate to app directory or clone if doesn't exist
-          if [ ! -d "~/SaaS_rag" ]; then
+          if [ ! -d "$HOME/SaaS_rag" ]; then
             echo "Repository not found. Please clone it manually first time:"
             echo "git clone <your-repo-url> ~/SaaS_rag"
             exit 1
           fi
           
-          cd ~/SaaS_rag
+          cd $HOME/SaaS_rag
           
           echo "=== Pulling latest code ==="
           git fetch origin
