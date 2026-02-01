@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from app.models.database import SessionLocal, DatabaseConnection, QueryHistory
@@ -9,8 +10,9 @@ from app.core.config import settings
 import logging
 import re
 import asyncio
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import time
+import json
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -24,6 +26,8 @@ class QueryRequest(BaseModel):
     connection_id: int
     query: str
     llm_config: LLMConfig | None = None
+    stream: bool = False  # Enable streaming response
+    execute_query: bool = True  # Force query execution
 
 class QueryResponse(BaseModel):
     answer: str
@@ -49,38 +53,61 @@ def should_auto_execute_query(user_query: str) -> bool:
         "show me", "get", "find", "list", "display", "fetch", "retrieve",
         "how many", "count", "total", "sum", "average", "latest", "recent",
         "all", "select", "where", "filter", "search", "data", "records",
-        "rows", "entries", "results", "details", "information"
+        "rows", "entries", "results", "details", "information", "orders",
+        "customers", "users", "products", "sales", "transactions"
+    ]
+    
+    # Non-execution keywords (questions about structure, not data)
+    non_execution_keywords = [
+        "what is", "how to", "explain", "describe", "structure", "schema",
+        "what are", "tell me about", "what does", "help me understand"
     ]
     
     query_lower = user_query.lower()
+    
+    # Check for non-execution keywords first
+    if any(keyword in query_lower for keyword in non_execution_keywords):
+        # Unless it also has execution keywords
+        if not any(keyword in query_lower for keyword in execution_keywords):
+            return False
+    
     return any(keyword in query_lower for keyword in execution_keywords)
 
-def is_safe_read_query(query: str) -> bool:
+def is_safe_read_query(query: str, db_type: str = "postgresql") -> bool:
     """Check if query is safe (read-only) to execute"""
     query_lower = query.lower().strip()
     
-    # Allowed operations
-    safe_operations = ["select", "show", "describe", "explain", "with"]
+    if db_type == "postgresql":
+        # Allowed SQL operations
+        safe_operations = ["select", "show", "describe", "explain", "with"]
+        
+        # Dangerous SQL operations
+        dangerous_operations = [
+            "insert", "update", "delete", "drop", "create", "alter", 
+            "truncate", "grant", "revoke", "exec", "execute"
+        ]
+        
+        # Check if query starts with safe operation
+        first_word = query_lower.split()[0] if query_lower.split() else ""
+        
+        if first_word in safe_operations:
+            # Double check it doesn't contain dangerous operations
+            return not any(dangerous in query_lower for dangerous in dangerous_operations)
+        
+        return False
     
-    # Dangerous operations
-    dangerous_operations = [
-        "insert", "update", "delete", "drop", "create", "alter", 
-        "truncate", "grant", "revoke", "exec", "execute"
-    ]
-    
-    # Check if query starts with safe operation
-    first_word = query_lower.split()[0] if query_lower.split() else ""
-    
-    if first_word in safe_operations:
-        # Double check it doesn't contain dangerous operations
-        return not any(dangerous in query_lower for dangerous in dangerous_operations)
+    elif db_type == "mongodb":
+        # For MongoDB, check if it's a find/query operation (JSON format)
+        # MongoDB queries in JSON are generally safe if they don't contain $merge, $out, etc.
+        dangerous_mongo = ["$merge", "$out", "$update", "$delete", "$drop"]
+        return not any(op in query_lower for op in dangerous_mongo)
     
     return False
 
-async def execute_database_query_safely(connection: DatabaseConnection, query: str) -> List[Dict]:
+async def execute_database_query_safely(connection: DatabaseConnection, query: str, db_type: str) -> List[Dict]:
     """Execute database query with safety checks and timeout"""
-    if not is_safe_read_query(query):
-        raise ValueError("Query contains potentially unsafe operations")
+    if not is_safe_read_query(query, db_type):
+        raise ValueError(f"Query contains potentially unsafe operations for {db_type}")
     
     connector = get_connector(connection.db_type)
     
@@ -94,14 +121,69 @@ async def execute_database_query_safely(connection: DatabaseConnection, query: s
                 query = f"{query.rstrip(';')} LIMIT 100"
             
             results = connector.execute_query(query)
-        else:  # MongoDB
-            # For MongoDB, parse the query and execute
-            results = []  # Implement MongoDB query execution
+        elif connection.db_type == "mongodb":
+            # For MongoDB, the query is already in JSON format from generate_query
+            # Execute it using the connector
+            try:
+                import json
+                query_obj = json.loads(query)
+                results = connector.execute_query(query_obj)
+            except json.JSONDecodeError:
+                raise ValueError("Invalid MongoDB query format")
+        else:
+            results = []
         
         return results[:100]  # Limit results to prevent memory issues
         
     finally:
         connector.close()
+
+def format_query_results(results: List[Dict], query: str, db_type: str) -> str:
+    """Format query results in a user-friendly way"""
+    if not results:
+        return "**Query Results:** No records found matching your criteria."
+    
+    result_count = len(results)
+    formatted = f"**Query Results:** Found {result_count} record{'s' if result_count > 1 else ''}.\n\n"
+    
+    # Format based on result size
+    if result_count <= 5:
+        # Show all results for small sets
+        formatted += "Here are all the results:\n\n"
+        for i, row in enumerate(results, 1):
+            formatted += f"**{i}.** {format_row(row)}\n"
+    elif result_count <= 20:
+        # Show first 10 for medium sets
+        formatted += f"Showing first 10 of {result_count} results:\n\n"
+        for i, row in enumerate(results[:10], 1):
+            formatted += f"**{i}.** {format_row(row)}\n"
+        formatted += f"\n... and {result_count - 10} more records."
+    else:
+        # Show summary for large sets
+        formatted += f"Showing first 5 of {result_count} results:\n\n"
+        for i, row in enumerate(results[:5], 1):
+            formatted += f"**{i}.** {format_row(row)}\n"
+        formatted += f"\n... and {result_count - 5} more records."
+    
+    return formatted
+
+def format_row(row: Dict) -> str:
+    """Format a single row/dict for display"""
+    if not row:
+        return "Empty record"
+    
+    # Format key-value pairs
+    parts = []
+    for key, value in row.items():
+        # Skip null/None values for cleaner display
+        if value is not None and value != "":
+            # Truncate long values
+            value_str = str(value)
+            if len(value_str) > 50:
+                value_str = value_str[:47] + "..."
+            parts.append(f"{key}: {value_str}")
+    
+    return " | ".join(parts) if parts else "No data"
 
 @router.post("/", response_model=QueryResponse)
 async def execute_query(
@@ -121,62 +203,105 @@ async def execute_query(
             raise HTTPException(status_code=404, detail="Connection not found")
         
         # Choose RAG service based on configuration
-        if settings.USE_LOCAL_MODELS:
-            logger.info("Using local RAG service")
-            rag_service = LocalRAGService(
-                embedding_service_url=settings.EMBEDDING_SERVICE_URL,
-                ollama_base_url=settings.OLLAMA_BASE_URL,
-                ollama_model=settings.OLLAMA_MODEL
-            )
+        # Priority: User-provided LLM config > Environment USE_LOCAL_MODELS setting
+        use_local = settings.USE_LOCAL_MODELS
+        
+        # If user provides LLM config with API key, use cloud service
+        if request.llm_config and request.llm_config.api_key:
+            use_local = False
+            logger.info(f"Using cloud RAG service with provider: {request.llm_config.provider}")
+        
+        # Initialize RAG service
+        if use_local:
+            logger.info("Using local RAG service with Ollama")
+            try:
+                rag_service = LocalRAGService(
+                    embedding_service_url=settings.EMBEDDING_SERVICE_URL,
+                    ollama_base_url=settings.OLLAMA_BASE_URL,
+                    ollama_model=settings.OLLAMA_MODEL
+                )
+            except Exception as e:
+                logger.error(f"Failed to initialize local RAG service: {e}")
+                raise HTTPException(
+                    status_code=503, 
+                    detail=f"Local model service unavailable. Please configure cloud LLM in settings or ensure Ollama is running with sufficient memory. Error: {str(e)}"
+                )
         else:
             logger.info("Using cloud RAG service")
             llm_config_dict = request.llm_config.model_dump() if request.llm_config else None
-            rag_service = RAGService(llm_config=llm_config_dict)
+            
+            if not llm_config_dict or not llm_config_dict.get("api_key"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cloud LLM requires API key. Please configure in LLM Settings."
+                )
+            
+            try:
+                rag_service = RAGService(llm_config=llm_config_dict)
+            except Exception as e:
+                logger.error(f"Failed to initialize cloud RAG service: {e}")
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Failed to initialize cloud LLM service: {str(e)}"
+                )
         
         # Determine if we should auto-execute queries
-        auto_execute = should_auto_execute_query(request.query)
+        auto_execute = should_auto_execute_query(request.query) or request.execute_query
         
         # Use RAG to answer query
         answer = rag_service.query_with_rag(request.query, connection.id)
         
         generated_query = None
         query_results = None
+        execution_error = None
         
         # Auto-generate and execute query if user intent suggests they want data
         if auto_execute:
             try:
                 schema = connection.db_metadata.get("schema", {})
+                db_type = connection.db_type
+                
+                logger.info(f"Generating query for {db_type} database")
                 generated_query = rag_service.generate_query(
                     request.query,
                     schema,
-                    connection.db_type
+                    db_type
                 )
                 
-                if generated_query and is_safe_read_query(generated_query):
-                    query_results = await execute_database_query_safely(connection, generated_query)
+                # Clean up generated query - remove markdown code blocks if present
+                if generated_query:
+                    generated_query = generated_query.strip()
+                    if generated_query.startswith("```"):
+                        # Extract query from markdown code block
+                        lines = generated_query.split('\n')
+                        # Remove first line (```sql or ```) and last line (```)
+                        if len(lines) > 2:
+                            generated_query = '\n'.join(lines[1:-1]).strip()
+                    elif generated_query.startswith("`") and generated_query.endswith("`"):
+                        # Remove inline code backticks
+                        generated_query = generated_query.strip('`')
+                
+                logger.info(f"Generated query: {generated_query[:100]}...")
+                
+                if generated_query and is_safe_read_query(generated_query, db_type):
+                    logger.info(f"Executing {db_type} query safely")
+                    query_results = await execute_database_query_safely(connection, generated_query, db_type)
                     
-                    # Enhance answer with actual results
-                    if query_results:
-                        result_count = len(query_results)
-                        answer += f"\n\n**Query Results:** Found {result_count} records."
-                        
-                        # Show sample of results if reasonable size
-                        if result_count <= 10:
-                            answer += f"\n\nHere are the results:\n"
-                            for i, row in enumerate(query_results[:5], 1):
-                                answer += f"{i}. {row}\n"
-                        else:
-                            answer += f"\n\nShowing first few results:\n"
-                            for i, row in enumerate(query_results[:3], 1):
-                                answer += f"{i}. {row}\n"
-                            answer += f"... and {result_count - 3} more records."
+                    # Enhance answer with formatted results
+                    results_message = format_query_results(query_results, generated_query, db_type)
+                    answer += f"\n\n{results_message}"
+                else:
+                    logger.warning(f"Generated query failed safety check or was empty")
+                    if not generated_query:
+                        answer += "\n\n*Note: Could not generate a valid query for your request.*"
                     else:
-                        answer += "\n\n**Query Results:** No records found matching your criteria."
+                        answer += f"\n\n*Note: Generated query failed safety check.*\n```\n{generated_query[:200]}\n```"
                         
             except Exception as e:
-                logger.warning(f"Auto query execution failed: {e}")
-                # Don't fail the whole request, just log the issue
-                answer += f"\n\n*Note: Could not automatically execute query due to: {str(e)}*"
+                logger.error(f"Auto query execution failed: {e}")
+                execution_error = str(e)
+                answer += f"\n\n*⚠️ Query Execution Issue: {execution_error}*"
+                answer += "\n\n**Generated Query:**\n```\n" + (generated_query or "Could not generate query") + "\n```"
         
         # Save to history
         history = QueryHistory(
@@ -198,6 +323,8 @@ async def execute_query(
             auto_executed=auto_execute and query_results is not None
         )
     
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Query execution failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
