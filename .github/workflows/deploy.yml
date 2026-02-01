@@ -136,6 +136,18 @@ jobs:
           echo "=== Checking service health ==="
           docker-compose -f docker-compose.prod.yml ps
           
+          echo "=== Pulling Ollama model (this may take 2-3 minutes) ==="
+          # Check if model exists, if not pull it
+          if ! docker exec ollama ollama list | grep -q "llama3.2:1b"; then
+            echo "Model not found. Pulling llama3.2:1b..."
+            docker exec ollama ollama pull llama3.2:1b || echo "Warning: Model pull may have failed"
+          else
+            echo "Model llama3.2:1b already exists"
+          fi
+          
+          echo "=== Verifying model is available ==="
+          docker exec ollama ollama list
+          
           echo "=== Cleaning up old images ==="
           docker image prune -f
           
