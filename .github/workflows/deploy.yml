@@ -126,7 +126,8 @@ jobs:
           echo "=== Building and starting containers ==="
           docker-compose -f docker-compose.prod.yml down --remove-orphans || true
           docker-compose -f docker-compose.prod.yml pull
-          docker-compose -f docker-compose.prod.yml build --no-cache
+          # Build with EC2_HOST passed as build argument for frontend
+          docker-compose -f docker-compose.prod.yml build --no-cache --build-arg REACT_APP_API_URL=http://$EC2_HOST:8000
           docker-compose -f docker-compose.prod.yml up -d
           
           echo "=== Waiting for services to start ==="
