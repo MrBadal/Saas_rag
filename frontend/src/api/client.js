@@ -37,8 +37,13 @@ export const connections = {
 };
 
 export const query = {
-  execute: (connection_id, query, llm_config) =>
-    client.post('/api/query/', { connection_id, query, llm_config }),
+  execute: (connection_id, query_text, llm_config, force_execute = true) =>
+    client.post('/api/query/', { 
+      connection_id, 
+      query: query_text, 
+      llm_config,
+      execute_query: force_execute  // Force query execution for better UX
+    }),
   getHistory: () =>
     client.get('/api/query/history'),
   getModels: (llm_config) =>

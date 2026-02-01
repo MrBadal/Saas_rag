@@ -8,11 +8,22 @@ function ChatInterface() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingStep, setLoadingStep] = useState(0);
+  const [loadingMessage, setLoadingMessage] = useState('');
   const [connectionList, setConnectionList] = useState([]);
   const [selectedConnection, setSelectedConnection] = useState(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [llmConfig, setLlmConfig] = useState(null);
   const messagesEndRef = useRef(null);
+
+  const loadingSteps = [
+    { message: '🤔 Understanding your question...', duration: 5000 },
+    { message: '🔍 Analyzing database schema...', duration: 5000 },
+    { message: '⚡ Generating optimized query...', duration: 8000 },
+    { message: '🚀 Executing query on database...', duration: 10000 },
+    { message: '📊 Processing results...', duration: 5000 },
+    { message: '✨ Finalizing response...', duration: 3000 }
+  ];
 
   useEffect(() => {
     loadConnections();
@@ -59,6 +70,25 @@ function ChatInterface() {
     }
   };
 
+  // Progress animation effect
+  useEffect(() => {
+    let interval;
+    if (loading) {
+      let currentStep = 0;
+      setLoadingStep(0);
+      setLoadingMessage(loadingSteps[0].message);
+      
+      interval = setInterval(() => {
+        currentStep++;
+        if (currentStep < loadingSteps.length) {
+          setLoadingStep(currentStep);
+          setLoadingMessage(loadingSteps[currentStep].message);
+        }
+      }, 4000); // Change step every 4 seconds
+    }
+    return () => clearInterval(interval);
+  }, [loading]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!input.trim() || !selectedConnection) return;
@@ -67,45 +97,70 @@ function ChatInterface() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setLoading(true);
+    setLoadingStep(0);
+    setLoadingMessage(loadingSteps[0].message);
 
     const startTime = Date.now();
 
     try {
-      const response = await query.execute(selectedConnection, input, llmConfig);
+      // Force query execution for better UX
+      const response = await query.execute(selectedConnection, input, llmConfig, true);
 
       let assistantContent = response.data.answer;
-
-      // Show execution info
       const executionTime = response.data.execution_time || (Date.now() - startTime) / 1000;
       
+      // Add execution metadata
+      assistantContent += `\n\n---\n📊 **Query Summary:**`;
+      assistantContent += `\n⏱️ Response time: ${executionTime.toFixed(2)}s`;
+      
       if (response.data.auto_executed) {
-        assistantContent += `\n\n✅ **Auto-executed query** (${executionTime.toFixed(2)}s)`;
-      } else if (executionTime) {
-        assistantContent += `\n\n⏱️ **Response time:** ${executionTime.toFixed(2)}s`;
+        assistantContent += `\n✅ Query was auto-executed`;
       }
 
       if (response.data.generated_query) {
-        assistantContent += `\n\n**Generated Query:**\n\`\`\`sql\n${response.data.generated_query}\n\`\`\``;
+        assistantContent += `\n\n**Generated Query:**\n\`\`\`${connectionList.find(c => c.id === selectedConnection)?.db_type || 'sql'}\n${response.data.generated_query}\n\`\`\``;
       }
 
       if (response.data.query_results && response.data.query_results.length > 0) {
-        assistantContent += `\n\n**Results:** ${response.data.query_results.length} rows returned`;
-        
-        // Show sample results in a formatted way
-        if (response.data.query_results.length <= 5) {
-          assistantContent += `\n\n**Sample Data:**`;
-          response.data.query_results.forEach((row, idx) => {
-            assistantContent += `\n${idx + 1}. ${JSON.stringify(row, null, 2)}`;
-          });
-        }
+        assistantContent += `\n\n📈 **Results:** ${response.data.query_results.length} rows returned`;
       }
 
       setMessages(prev => [...prev, { role: 'assistant', content: assistantContent }]);
     } catch (err) {
       const errorTime = (Date.now() - startTime) / 1000;
+      let errorMessage = `❌ Sorry, I encountered an error processing your query (${errorTime.toFixed(2)}s).`;
+      
+      // Check for specific error types
+      if (err.response?.status === 503) {
+        const detail = err.response?.data?.detail || '';
+        if (detail.includes('memory') || detail.includes('Ollama')) {
+          errorMessage = `❌ **Local Model Memory Issue**\n\n` +
+            `The local Ollama model requires more memory than available.\n\n` +
+            `**Quick Fix:**\n` +
+            `1. Click "LLM Settings" above\n` +
+            `2. Uncheck "Use Local Models"\n` +
+            `3. Select a cloud provider (OpenAI/Google/OpenRouter)\n` +
+            `4. Enter your API key\n` +
+            `5. Save and try again\n\n` +
+            `This will use cloud LLMs which are faster and don't require local memory.\n\n` +
+            `Error details: ${detail}`;
+        } else {
+          errorMessage += `\n\n${detail}`;
+        }
+      } else if (err.response?.status === 400) {
+        errorMessage = `❌ **Configuration Required**\n\n` +
+          `Please configure your LLM settings:\n` +
+          `1. Click "LLM Settings" above\n` +
+          `2. Choose local or cloud provider\n` +
+          `3. Enter required credentials\n` +
+          `4. Save and try again`;
+      } else {
+        errorMessage += `\n\nPlease check your connection settings and try again.`;
+      }
+      
       setMessages(prev => [...prev, {
         role: 'assistant',
-        content: `❌ Sorry, I encountered an error processing your query (${errorTime.toFixed(2)}s). Please try again or check your connection settings.`
+        content: errorMessage
       }]);
     } finally {
       setLoading(false);
@@ -290,18 +345,58 @@ function ChatInterface() {
               ))}
               {loading && (
                 <div className="flex justify-start">
-                  <div className="flex gap-3">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center">
+                  <div className="flex gap-3 max-w-[85%]">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center flex-shrink-0">
                       <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                       </svg>
                     </div>
-                    <div className="message-assistant px-5 py-3">
-                      <div className="flex space-x-2">
-                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
-                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    <div className="message-assistant px-5 py-4 w-full">
+                      {/* Progress Steps */}
+                      <div className="mb-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="flex space-x-1">
+                            {[...Array(3)].map((_, i) => (
+                              <div 
+                                key={i} 
+                                className="w-2 h-2 bg-blue-400 rounded-full animate-bounce"
+                                style={{ animationDelay: `${i * 0.15}s` }}
+                              />
+                            ))}
+                          </div>
+                          <span className="text-blue-300 text-sm font-medium">{loadingMessage}</span>
+                        </div>
+                        
+                        {/* Progress Bar */}
+                        <div className="w-full bg-gray-700 rounded-full h-2 mb-3">
+                          <div 
+                            className="bg-gradient-to-r from-blue-500 to-purple-600 h-2 rounded-full transition-all duration-1000 ease-out"
+                            style={{ width: `${((loadingStep + 1) / loadingSteps.length) * 100}%` }}
+                          />
+                        </div>
+                        
+                        {/* Step Indicators */}
+                        <div className="flex justify-between text-xs text-gray-400">
+                          {loadingSteps.map((step, idx) => (
+                            <div 
+                              key={idx}
+                              className={`flex flex-col items-center ${idx <= loadingStep ? 'text-blue-400' : ''}`}
+                            >
+                              <div 
+                                className={`w-2 h-2 rounded-full mb-1 ${
+                                  idx < loadingStep ? 'bg-blue-500' : 
+                                  idx === loadingStep ? 'bg-blue-400 animate-pulse' : 
+                                  'bg-gray-600'
+                                }`}
+                              />
+                            </div>
+                          ))}
+                        </div>
                       </div>
+                      
+                      <p className="text-xs text-gray-500 italic">
+                        ⏱️ This may take 30-60 seconds with local LLM. Consider switching to cloud LLM for faster responses.
+                      </p>
                     </div>
                   </div>
                 </div>
