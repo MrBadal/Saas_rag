@@ -2,12 +2,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth, connections, query, settings
 from app.core.config import settings as app_settings
+from app.models.database import init_db
 
 app = FastAPI(
     title="Universal RAG Platform",
     description="AI-powered database query system with RAG",
     version="1.0.0"
 )
+
+# Initialize database tables on startup
+@app.on_event("startup")
+async def startup_event():
+    init_db()
 
 # CORS
 app.add_middleware(
