@@ -117,11 +117,11 @@ if curl -s http://localhost:11434/api/tags > /dev/null 2>&1; then
     print_status "Ollama is running"
     
     # Check if model is pulled
-    if curl -s http://localhost:11434/api/tags | grep -q "llama3.2"; then
-        print_status "LLM model (llama3.2) is available"
+    if curl -s http://localhost:11434/api/tags | grep -q "llama3.2:1b"; then
+        print_status "LLM model (llama3.2:1b) is available"
     else
-        print_warning "LLM model not found. Pulling llama3.2 (this may take a while)..."
-        docker exec ollama ollama pull llama3.2 || print_warning "Model pull failed, will retry on next deployment"
+        print_warning "LLM model not found. Pulling llama3.2:1b (this may take 2-3 minutes)..."
+        docker exec ollama ollama pull llama3.2:1b || print_warning "Model pull failed, will retry on next deployment"
     fi
 else
     print_warning "Ollama may still be starting..."

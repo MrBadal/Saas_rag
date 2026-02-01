@@ -22,7 +22,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 256M  # Reduced from 512M to optimize memory usage
 
   # Local Embedding Service
   embedding-service:
@@ -41,7 +41,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1G
+          memory: 256M  # Reduced from 1G to save memory for Ollama
 
   # Ollama (Local LLM)
   ollama:
@@ -55,7 +55,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1.5G
+          memory: 2G  # Increased from 1.5G for llama3.2:1b model
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
       interval: 30s
@@ -87,7 +87,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 256M  # Reduced from 512M to optimize memory usage
 
   # Frontend
   frontend:
@@ -105,7 +105,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512M
+          memory: 256M  # Reduced from 512M to optimize memory usage
 
 volumes:
   postgres_data:
