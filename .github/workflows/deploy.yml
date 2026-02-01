@@ -113,6 +113,10 @@ jobs:
         AWS_REGION=${{ secrets.AWS_REGION }}
         ENVFILE
           
+          echo "=== Setting up environment ==="
+          export EC2_HOST=${{ secrets.EC2_HOST }}
+          echo "EC2_HOST set to: $EC2_HOST"
+          
           echo "=== Building and starting containers ==="
           docker-compose -f docker-compose.prod.yml down --remove-orphans || true
           docker-compose -f docker-compose.prod.yml pull
