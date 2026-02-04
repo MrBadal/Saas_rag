@@ -100,8 +100,7 @@ echo ""
 print_status "Step 4: Building and deploying..."
 
 # Build with no-cache to ensure clean build
-# Use COMPOSE_PARALLEL_LIMIT to reduce resource usage
-docker-compose -f docker-compose.prod.yml build --no-cache --parallel 1
+docker-compose -f docker-compose.prod.yml build --no-cache
 
 # Start services
 echo ""
