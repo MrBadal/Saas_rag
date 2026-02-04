@@ -1,5 +1,6 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import ConnectionStatus from './ConnectionStatus';
 
 function Dashboard({ onLogout }) {
   const navigate = useNavigate();
@@ -127,6 +128,11 @@ function Dashboard({ onLogout }) {
                 Start Chatting
               </Link>
             </div>
+          </div>
+
+          {/* Connection Status */}
+          <div className="max-w-2xl mx-auto mb-8">
+            <ConnectionStatus />
           </div>
 
           {/* Stats */}

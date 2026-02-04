@@ -95,7 +95,9 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        - REACT_APP_API_URL=http://${EC2_HOST:-localhost}:8000
+        # IMPORTANT: Set this to your actual EC2 public IP
+        # Current IP: 13.233.168.67
+        - REACT_APP_API_URL=http://13.233.168.67:8000
     container_name: frontend
     ports:
       - "3000:3000"
