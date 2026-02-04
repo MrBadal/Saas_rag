@@ -1,5 +1,12 @@
 version: '3.8'
 
+# Build configuration to reduce disk usage
+x-build-defaults: &build-defaults
+  cache_from:
+    - type=local,src=/tmp/.buildx-cache
+  cache_to:
+    - type=local,dest=/tmp/.buildx-cache,mode=max
+
 services:
   # PostgreSQL with pgvector
   postgres:
