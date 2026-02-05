@@ -123,11 +123,43 @@ jobs:
           export EC2_HOST=${{ secrets.EC2_HOST }}
           echo "EC2_HOST set to: $EC2_HOST"
           
-          echo "=== Building and starting containers ==="
+          echo "=== Pre-build disk cleanup ==="
+          # Stop and remove existing containers first
           docker-compose -f docker-compose.prod.yml down --remove-orphans || true
+          
+          # Remove project-specific images to free space
+          docker images | grep -E "(saas_rag|frontend|backend|embedding)" | awk '{print $3}' | xargs docker rmi -f 2>/dev/null || true
+          
+          # Clear build cache
+          docker builder prune -af 2>/dev/null || true
+          
+          # System cleanup
+          docker system prune -f
+          
+          # Check available disk space
+          AVAILABLE_KB=$(df / | tail -1 | awk '{print $4}')
+          echo "Available disk space: $(echo "$AVAILABLE_KB / 1024" | bc) MB"
+          
+          # Aggressive cleanup if disk is low (less than 2GB)
+          if [ "$AVAILABLE_KB" -lt 2097152 ]; then
+            echo "WARNING: Low disk space! Running aggressive cleanup..."
+            docker system prune -af --volumes
+            AVAILABLE_KB=$(df / | tail -1 | awk '{print $4}')
+            echo "After cleanup: $(echo "$AVAILABLE_KB / 1024" | bc) MB"
+          fi
+          
+          echo "=== Building and starting containers ==="
           docker-compose -f docker-compose.prod.yml pull
-          # Build with EC2_HOST passed as build argument for frontend
-          docker-compose -f docker-compose.prod.yml build --no-cache --build-arg REACT_APP_API_URL=http://$EC2_HOST:8000
+          
+          # Build with cache if space is good, --no-cache if space is low
+          if [ "$AVAILABLE_KB" -lt 4194304 ]; then
+            echo "Building with --no-cache (disk space low)"
+            docker-compose -f docker-compose.prod.yml build --no-cache --build-arg REACT_APP_API_URL=http://$EC2_HOST:8000
+          else
+            echo "Building with cache"
+            docker-compose -f docker-compose.prod.yml build --build-arg REACT_APP_API_URL=http://$EC2_HOST:8000
+          fi
+          
           docker-compose -f docker-compose.prod.yml up -d
           
           echo "=== Waiting for services to start ==="
@@ -148,8 +180,14 @@ jobs:
           echo "=== Verifying model is available ==="
           docker exec ollama ollama list
           
-          echo "=== Cleaning up old images ==="
+          echo "=== Post-deployment cleanup ==="
+          # Remove dangling images
           docker image prune -f
+          # Remove unused volumes
+          docker volume prune -f
+          # Show final disk usage
+          echo "Final disk usage:"
+          df -h / | head -2
           
           echo "=== Deployment completed successfully ==="
         EOF

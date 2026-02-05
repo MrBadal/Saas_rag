@@ -18,6 +18,7 @@ from app.core.config import settings
 from app.core.prompts import get_query_generation_prompt, get_rag_qa_prompt
 from app.utils.query_cleaner import clean_query, QueryCleaner
 from app.services.query_validator import QueryValidator
+from app.services.local_embeddings import LocalEmbeddings
 import json
 import logging
 import time
@@ -55,11 +56,10 @@ class RAGService:
         logger.info(f"RAGService initialized with provider: {self.provider}")
     
     def _initialize_embeddings(self):
-        """Initialize embeddings - use OpenAI for all cloud providers"""
+        """Initialize embeddings based on provider"""
         try:
-            # CRITICAL FIX: Use OpenAI embeddings for ALL cloud providers
-            # OpenRouter doesn't support embeddings, so we use OpenAI universally
-            if self.provider in ['openai', 'openrouter']:
+            if self.provider == 'openai':
+                # OpenAI users can use OpenAI embeddings
                 if not self.api_key:
                     raise ValueError("OpenAI API key required for embeddings")
                 
@@ -68,23 +68,47 @@ class RAGService:
                     model="text-embedding-ada-002"
                 )
             
+            elif self.provider == 'openrouter':
+                # OpenRouter doesn't support embeddings - use local embedding service
+                # The local embedding service runs as part of the docker-compose stack
+                logger.info("OpenRouter: Using local embedding service (OpenRouter doesn't support embeddings)")
+                try:
+                    return LocalEmbeddings(
+                        service_url=settings.EMBEDDING_SERVICE_URL or "http://embedding_service:8001"
+                    )
+                except Exception as e:
+                    logger.warning(f"Local embeddings failed, trying OpenAI fallback: {e}")
+                    # If local embeddings fail and we have an env OpenAI key, use that
+                    if settings.OPENAI_API_KEY:
+                        return OpenAIEmbeddings(
+                            openai_api_key=settings.OPENAI_API_KEY,
+                            model="text-embedding-ada-002"
+                        )
+                    raise ValueError("OpenRouter requires local embedding service or OPENAI_API_KEY in environment")
+            
             elif self.provider == 'google':
                 # Google has its own embeddings
-                api_key = self.api_key or settings.OPENAI_API_KEY
-                if api_key:
-                    # Fallback to OpenAI if Google key not available
-                    return OpenAIEmbeddings(openai_api_key=api_key)
-                
-                return GoogleGenerativeAIEmbeddings(
-                    model="models/embedding-001",
-                    google_api_key=self.api_key
-                )
+                try:
+                    return GoogleGenerativeAIEmbeddings(
+                        model="models/embedding-001",
+                        google_api_key=self.api_key
+                    )
+                except Exception as e:
+                    logger.warning(f"Google embeddings failed, trying local: {e}")
+                    return LocalEmbeddings(
+                        service_url=settings.EMBEDDING_SERVICE_URL or "http://embedding_service:8001"
+                    )
             
             else:
-                # Default to OpenAI
-                if not self.api_key:
-                    raise ValueError("API key required for embeddings")
-                return OpenAIEmbeddings(openai_api_key=self.api_key)
+                # Default: try local embeddings first, then OpenAI
+                try:
+                    return LocalEmbeddings(
+                        service_url=settings.EMBEDDING_SERVICE_URL or "http://embedding_service:8001"
+                    )
+                except Exception as e:
+                    if self.api_key:
+                        return OpenAIEmbeddings(openai_api_key=self.api_key)
+                    raise ValueError(f"No embedding service available: {e}")
                 
         except Exception as e:
             logger.error(f"Failed to initialize embeddings: {e}")
