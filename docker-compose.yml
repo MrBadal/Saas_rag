@@ -51,7 +51,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=postgresql://raguser:ragpass@postgres:5432/ragdb
+      - DATABASE_URL=postgresql://raguser:ragpass@ragdb:5432/ragdb
       - USE_LOCAL_MODELS=true
       - EMBEDDING_SERVICE_URL=http://embedding-service:8001
       - OLLAMA_BASE_URL=http://ollama:11434
