@@ -60,11 +60,14 @@ function ChatInterface() {
   const loadHistory = async () => {
     try {
       const response = await query.getHistory();
-      const historyMessages = response.data.flatMap(item => [
+      const sortedHistory = [...response.data].sort(
+        (a, b) => new Date(a.created_at) - new Date(b.created_at)
+      );
+      const historyMessages = sortedHistory.flatMap(item => [
         { role: 'user', content: item.query },
         { role: 'assistant', content: item.response }
       ]);
-      setMessages(historyMessages.slice(-10));
+      setMessages(historyMessages.slice(-20));
     } catch (err) {
       console.error('Failed to load history:', err);
     }
@@ -106,26 +109,24 @@ function ChatInterface() {
       // Force query execution for better UX
       const response = await query.execute(selectedConnection, input, llmConfig, true);
 
-      let assistantContent = response.data.answer;
       const executionTime = response.data.execution_time || (Date.now() - startTime) / 1000;
-      
-      // Add execution metadata
-      assistantContent += `\n\n---\n📊 **Query Summary:**`;
-      assistantContent += `\n⏱️ Response time: ${executionTime.toFixed(2)}s`;
-      
-      if (response.data.auto_executed) {
-        assistantContent += `\n✅ Query was auto-executed`;
-      }
+      const assistantMeta = {
+        executionTime,
+        autoExecuted: response.data.auto_executed,
+        generatedQuery: response.data.generated_query,
+        queryResults: response.data.query_results,
+        visualization: response.data.visualization,
+        dbType: connectionList.find(c => c.id === selectedConnection)?.db_type || 'sql'
+      };
 
-      if (response.data.generated_query) {
-        assistantContent += `\n\n**Generated Query:**\n\`\`\`${connectionList.find(c => c.id === selectedConnection)?.db_type || 'sql'}\n${response.data.generated_query}\n\`\`\``;
-      }
-
-      if (response.data.query_results && response.data.query_results.length > 0) {
-        assistantContent += `\n\n📈 **Results:** ${response.data.query_results.length} rows returned`;
-      }
-
-      setMessages(prev => [...prev, { role: 'assistant', content: assistantContent }]);
+      setMessages(prev => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: response.data.answer,
+          meta: assistantMeta
+        }
+      ]);
     } catch (err) {
       const errorTime = (Date.now() - startTime) / 1000;
       let errorMessage = `❌ Sorry, I encountered an error processing your query (${errorTime.toFixed(2)}s).`;
@@ -167,17 +168,127 @@ function ChatInterface() {
     }
   };
 
-  const formatMessage = (content) => {
-    // Simple markdown-like formatting
-    return content.split('\n').map((line, i) => {
-      if (line.startsWith('**') && line.endsWith('**')) {
-        return <p key={i} className="font-bold text-blue-300 mt-3 mb-2">{line.replace(/\*\*/g, '')}</p>;
+  const renderInlineBold = (text) => {
+    const parts = text.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((part, index) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return (
+          <strong key={`${part}-${index}`} className="text-white">
+            {part.slice(2, -2)}
+          </strong>
+        );
       }
-      if (line.startsWith('```')) {
-        return null; // Handled separately
-      }
-      return <p key={i} className="mb-1">{line}</p>;
+      return <span key={`${part}-${index}`}>{part}</span>;
     });
+  };
+
+  const renderMessageContent = (content) => {
+    const segments = content.split('```');
+
+    return segments.map((segment, segmentIndex) => {
+      if (segmentIndex % 2 === 1) {
+        const [langLine, ...codeLines] = segment.split('\n');
+        const code = codeLines.join('\n');
+        return (
+          <pre key={`code-${segmentIndex}`} className="code-block">
+            <code className="text-xs">{code.trim()}</code>
+            {langLine && <span className="code-language">{langLine.trim()}</span>}
+          </pre>
+        );
+      }
+
+      return segment.split('\n').map((line, lineIndex) => {
+        if (!line.trim()) {
+          return <div key={`spacer-${segmentIndex}-${lineIndex}`} className="h-2" />;
+        }
+
+        if (line.startsWith('###')) {
+          return (
+            <h4 key={`h3-${segmentIndex}-${lineIndex}`} className="text-sm font-semibold text-blue-200 mt-3">
+              {line.replace(/^###\s*/, '')}
+            </h4>
+          );
+        }
+
+        if (line.startsWith('##')) {
+          return (
+            <h3 key={`h2-${segmentIndex}-${lineIndex}`} className="text-base font-semibold text-blue-200 mt-3">
+              {line.replace(/^##\s*/, '')}
+            </h3>
+          );
+        }
+
+        if (line.startsWith('#')) {
+          return (
+            <h2 key={`h1-${segmentIndex}-${lineIndex}`} className="text-lg font-semibold text-blue-100 mt-3">
+              {line.replace(/^#\s*/, '')}
+            </h2>
+          );
+        }
+
+        if (line.startsWith('- ') || line.startsWith('* ')) {
+          return (
+            <div key={`li-${segmentIndex}-${lineIndex}`} className="flex gap-2 text-sm text-slate-200">
+              <span className="text-blue-400">•</span>
+              <span>{renderInlineBold(line.replace(/^[-*]\s*/, ''))}</span>
+            </div>
+          );
+        }
+
+        return (
+          <p key={`p-${segmentIndex}-${lineIndex}`} className="text-sm text-slate-200">
+            {renderInlineBold(line)}
+          </p>
+        );
+      });
+    });
+  };
+
+  const renderResultsTable = (results = []) => {
+    if (!Array.isArray(results) || results.length === 0) {
+      return null;
+    }
+
+    const headers = Object.keys(results[0] || {});
+    const displayRows = results.slice(0, 8);
+
+    return (
+      <div className="mt-4 rounded-xl border border-white/10 bg-white/5 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 text-xs text-slate-300">
+          <span>Query Results</span>
+          <span>{results.length} rows</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-xs text-slate-200">
+            <thead className="bg-white/5 text-slate-300">
+              <tr>
+                {headers.map((header) => (
+                  <th key={header} className="px-4 py-2 text-left font-medium whitespace-nowrap">
+                    {header}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {displayRows.map((row, rowIndex) => (
+                <tr key={rowIndex} className="border-t border-white/5">
+                  {headers.map((header) => (
+                    <td key={`${rowIndex}-${header}`} className="px-4 py-2 whitespace-nowrap">
+                      {row[header] !== undefined && row[header] !== null ? String(row[header]) : '—'}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {results.length > displayRows.length && (
+          <div className="px-4 py-2 text-[11px] text-slate-400 border-t border-white/10">
+            Showing {displayRows.length} of {results.length} rows.
+          </div>
+        )}
+      </div>
+    );
   };
 
   const selectedConnData = connectionList.find(c => c.id === selectedConnection);
@@ -185,7 +296,7 @@ function ChatInterface() {
   return (
     <div className="min-h-screen animated-bg flex flex-col">
       {/* Navigation */}
-      <nav className="nav-blur">
+      <nav className="nav-blur fixed top-0 left-0 right-0 z-30">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex justify-between h-16 items-center">
             <div className="flex items-center gap-3">
@@ -237,9 +348,9 @@ function ChatInterface() {
       />
 
       {/* Main Chat Area */}
-      <div className="flex-1 max-w-6xl w-full mx-auto p-4 flex flex-col">
+      <div className="flex-1 max-w-6xl w-full mx-auto px-4 pb-24 pt-20 flex flex-col">
         {/* Connection Selector */}
-        <div className="glass-card p-4 rounded-xl mb-4">
+        <div className="glass-card p-4 rounded-xl mb-4 border border-white/10 shadow-[0_0_25px_rgba(59,130,246,0.15)]">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 text-gray-300">
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -279,7 +390,7 @@ function ChatInterface() {
         )}
 
         {/* Messages Area */}
-        <div className="flex-1 glass-card rounded-2xl p-6 mb-4 overflow-y-auto min-h-[400px]">
+        <div className="flex-1 glass-card rounded-2xl p-6 mb-4 overflow-y-auto min-h-[400px] chat-scroll-area">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col items-center justify-center text-center">
               <div className="w-24 h-24 rounded-full bg-gradient-to-br from-blue-500/20 to-purple-600/20 flex items-center justify-center mb-6">
@@ -336,9 +447,41 @@ function ChatInterface() {
                         : 'message-assistant text-gray-200'
                         }`}
                     >
-                      <pre className="whitespace-pre-wrap font-sans text-sm leading-relaxed">
-                        {msg.content}
-                      </pre>
+                      {msg.role === 'assistant' ? (
+                        <div className="space-y-3">
+                          <div className="message-body">{renderMessageContent(msg.content)}</div>
+                          {msg.meta && (
+                            <div className="mt-2 text-xs text-slate-400 space-y-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                {typeof msg.meta.executionTime === 'number' && (
+                                  <span className="inline-flex items-center gap-2 bg-white/5 px-3 py-1 rounded-full border border-white/10">
+                                    ⏱️ {msg.meta.executionTime.toFixed(2)}s
+                                  </span>
+                                )}
+                                {msg.meta.autoExecuted && (
+                                  <span className="inline-flex items-center gap-2 bg-emerald-500/10 text-emerald-200 px-3 py-1 rounded-full border border-emerald-400/30">
+                                    ✅ Auto-executed
+                                  </span>
+                                )}
+                                {msg.meta.generatedQuery && (
+                                  <span className="inline-flex items-center gap-2 bg-blue-500/10 text-blue-200 px-3 py-1 rounded-full border border-blue-400/30">
+                                    📄 SQL Generated
+                                  </span>
+                                )}
+                              </div>
+                              {msg.meta.generatedQuery && (
+                                <pre className="code-block">
+                                  <code className="text-xs">{msg.meta.generatedQuery}</code>
+                                  <span className="code-language">{msg.meta.dbType}</span>
+                                </pre>
+                              )}
+                              {renderResultsTable(msg.meta.queryResults)}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -407,40 +550,42 @@ function ChatInterface() {
         </div>
 
         {/* Input Area */}
-        <form onSubmit={handleSubmit} className="flex gap-3">
-          <div className="flex-1 relative">
-            <input
-              type="text"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder={selectedConnection ? "Ask a question about your database..." : "Select a database connection first..."}
-              className="input-modern w-full px-5 py-4 rounded-xl text-white placeholder-gray-500 pr-12"
-              disabled={!selectedConnection || loading}
-            />
-            <svg className="absolute right-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-            </svg>
-          </div>
-          <button
-            type="submit"
-            disabled={!selectedConnection || loading || !input.trim()}
-            className="btn-primary text-white px-6 py-4 rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-          >
-            {loading ? (
-              <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        <div className="chat-input-bar">
+          <form onSubmit={handleSubmit} className="flex gap-3">
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                placeholder={selectedConnection ? "Ask a question about your database..." : "Select a database connection first..."}
+                className="input-modern w-full px-5 py-4 rounded-xl text-white placeholder-gray-500 pr-12"
+                disabled={!selectedConnection || loading}
+              />
+              <svg className="absolute right-4 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
               </svg>
-            ) : (
-              <>
-                <span>Send</span>
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+            </div>
+            <button
+              type="submit"
+              disabled={!selectedConnection || loading || !input.trim()}
+              className="btn-primary text-white px-6 py-4 rounded-xl font-semibold disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {loading ? (
+                <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                 </svg>
-              </>
-            )}
-          </button>
-        </form>
+              ) : (
+                <>
+                  <span>Send</span>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                  </svg>
+                </>
+              )}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );
