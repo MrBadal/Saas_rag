@@ -26,11 +26,34 @@ body {
   overflow-x: hidden;
 }
 
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: radial-gradient(circle at 15% 20%, rgba(99, 102, 241, 0.15), transparent 45%),
+    radial-gradient(circle at 85% 10%, rgba(236, 72, 153, 0.15), transparent 40%),
+    radial-gradient(circle at 50% 90%, rgba(16, 185, 129, 0.12), transparent 45%);
+  pointer-events: none;
+  z-index: -1;
+}
+
 /* Animated background */
 .animated-bg {
   background: linear-gradient(-45deg, #0f0f23, #1a1a3e, #16213e, #0f3460);
   background-size: 400% 400%;
   animation: gradientShift 15s ease infinite;
+  position: relative;
+}
+
+.animated-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 60px 60px;
+  opacity: 0.3;
+  pointer-events: none;
 }
 
 @keyframes gradientShift {
@@ -144,6 +167,26 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+.message-body p {
+  line-height: 1.6;
+}
+
+.chat-scroll-area {
+  max-height: calc(100vh - 320px);
+  overscroll-behavior: contain;
+}
+
+.chat-input-bar {
+  position: sticky;
+  bottom: 0;
+  padding: 16px;
+  background: linear-gradient(180deg, rgba(15, 15, 35, 0.6) 0%, rgba(15, 15, 35, 0.95) 100%);
+  backdrop-filter: blur(18px);
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.35);
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 8px;
@@ -212,6 +255,21 @@ pre {
   padding: 16px;
   overflow-x: auto;
   border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.code-block {
+  position: relative;
+  padding-top: 20px;
+}
+
+.code-language {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: rgba(148, 163, 184, 0.8);
 }
 
 code {
